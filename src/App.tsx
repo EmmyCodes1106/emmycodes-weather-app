@@ -25,6 +25,14 @@ interface PhotonGeocodingResponse {
   }>;
 }
 
+// Type definition for a single day in the 3-day forecast
+interface DailyForecastDay {
+  date: string;
+  dayLabel: string;
+  maxTemp: number;
+  minTemp: number;
+}
+
 // Type definitions for Open-Meteo Weather Forecast API response
 interface WeatherResponse {
   current?: {
@@ -33,6 +41,15 @@ interface WeatherResponse {
   };
   current_units?: {
     temperature_2m: string;
+  };
+  daily?: {
+    time: string[];
+    temperature_2m_max: number[];
+    temperature_2m_min: number[];
+  };
+  daily_units?: {
+    temperature_2m_max?: string;
+    temperature_2m_min?: string;
   };
   error?: boolean;
   reason?: string;
@@ -52,9 +69,33 @@ function App() {
   const [temperature, setTemperature] = useState<number | null>(null);
   const [unit, setUnit] = useState<string>('°C');
   const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [forecast, setForecast] = useState<DailyForecastDay[]>([]);
   const [observationTime, setObservationTime] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Helper to format date label (e.g. Tomorrow, Tue, Wed)
+  const formatDayLabel = (dateStr: string, index: number): string => {
+    if (index === 0) return 'Tomorrow';
+    const date = new Date(dateStr + 'T00:00:00');
+    return date.toLocaleDateString(undefined, { weekday: 'short' });
+  };
+
+  // Helper to extract the next 3 days from daily forecast data
+  const parseNext3Days = (daily?: WeatherResponse['daily']): DailyForecastDay[] => {
+    if (!daily?.time || daily.time.length < 2) return [];
+    const days: DailyForecastDay[] = [];
+    // Start from index 1 (next 3 days after today, which is index 0)
+    for (let i = 1; i < Math.min(4, daily.time.length); i++) {
+      days.push({
+        date: daily.time[i],
+        dayLabel: formatDayLabel(daily.time[i], i - 1),
+        maxTemp: daily.temperature_2m_max[i],
+        minTemp: daily.temperature_2m_min[i],
+      });
+    }
+    return days;
+  };
 
   // Helper to geocode a city using Open-Meteo with 2s timeout, falling back to Photon
   const geocodeCity = async (cityName: string): Promise<GeocodedLocation> => {
@@ -112,9 +153,9 @@ function App() {
     throw new Error('City not found');
   };
 
-  // Helper to fetch forecast from Open-Meteo with retry
+  // Helper to fetch forecast (current + next 3 days) with retry
   const fetchForecast = async (lat: number, lon: number): Promise<WeatherResponse> => {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m&timezone=auto`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m&daily=temperature_2m_max,temperature_2m_min&forecast_days=4&timezone=auto`;
     let res = await fetch(url);
     let data: WeatherResponse = await res.json();
 
@@ -132,7 +173,7 @@ function App() {
     return data;
   };
 
-  // Main fetch function for any city: updates current temperature
+  // Main fetch function for any city: updates current temperature & 3-day forecast
   const fetchWeatherForCity = async (cityName: string) => {
     setLoading(true);
     setError(null);
@@ -153,6 +194,7 @@ function App() {
         if (weatherData.current.time) {
           setObservationTime(weatherData.current.time.replace('T', ' '));
         }
+        setForecast(parseNext3Days(weatherData.daily));
       } else {
         throw new Error('Temperature data unavailable');
       }
@@ -189,7 +231,7 @@ function App() {
         const { latitude, longitude, name, country } = data.results[0];
 
         const weatherRes = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m&timezone=auto`
+          `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m&daily=temperature_2m_max,temperature_2m_min&forecast_days=4&timezone=auto`
         );
         if (!weatherRes.ok) throw new Error('Failed to reach weather service');
         const weatherData: WeatherResponse = await weatherRes.json();
@@ -204,6 +246,18 @@ function App() {
             if (weatherData.current.time) {
               setObservationTime(weatherData.current.time.replace('T', ' '));
             }
+          }
+          if (weatherData.daily?.time && weatherData.daily.time.length > 1) {
+            const days: DailyForecastDay[] = [];
+            for (let i = 1; i < Math.min(4, weatherData.daily.time.length); i++) {
+              days.push({
+                date: weatherData.daily.time[i],
+                dayLabel: i === 1 ? 'Tomorrow' : new Date(weatherData.daily.time[i] + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short' }),
+                maxTemp: weatherData.daily.temperature_2m_max[i],
+                minTemp: weatherData.daily.temperature_2m_min[i],
+              });
+            }
+            setForecast(days);
           }
           setLoading(false);
         }
@@ -319,6 +373,37 @@ function App() {
             </>
           )}
         </section>
+
+        {/* Piece 3: Next 3 Days Section */}
+        {forecast.length > 0 && !loading && !error && (
+          <section className="forecast-section">
+            <div className="forecast-header">
+              <span className="forecast-title">Next 3 Days</span>
+              <span className="forecast-badge">High / Low Forecast</span>
+            </div>
+
+            <div className="forecast-list">
+              {forecast.map((day) => (
+                <div key={day.date} className="forecast-card">
+                  <div className="forecast-day-info">
+                    <span className="forecast-day-name">{day.dayLabel}</span>
+                    <span className="forecast-date">{day.date}</span>
+                  </div>
+                  <div className="forecast-temp-range">
+                    <span className="temp-pill max" title="Highest temperature">
+                      <span className="temp-arrow">▲</span>
+                      <span>{day.maxTemp.toFixed(1)}°C</span>
+                    </span>
+                    <span className="temp-pill min" title="Lowest temperature">
+                      <span className="temp-arrow">▼</span>
+                      <span>{day.minTemp.toFixed(1)}°C</span>
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Refresh button */}
         <button
