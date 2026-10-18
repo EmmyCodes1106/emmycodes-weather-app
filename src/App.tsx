@@ -71,6 +71,7 @@ function App() {
   const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
   const [forecast, setForecast] = useState<DailyForecastDay[]>([]);
   const [observationTime, setObservationTime] = useState<string | null>(null);
+  const [notFoundCity, setNotFoundCity] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -98,7 +99,7 @@ function App() {
   };
 
   // Helper to geocode a city using Open-Meteo with 2s timeout, falling back to Photon
-  const geocodeCity = async (cityName: string): Promise<GeocodedLocation> => {
+  const geocodeCity = async (cityName: string): Promise<GeocodedLocation | null> => {
     const encoded = encodeURIComponent(cityName.trim());
 
     // Attempt 1: Open-Meteo Geocoding with a 2-second timeout
@@ -125,32 +126,37 @@ function App() {
         }
       }
     } catch {
-      // Open-Meteo timed out or failed; proceed to Photon backup
+      // Open-Meteo timed out or network error; proceed to Photon backup
     } finally {
       clearTimeout(timeoutId);
     }
 
     // Attempt 2: Photon Backup API
-    const photonRes = await fetch(
-      `https://photon.komoot.io/api/?q=${encoded}&limit=1&layer=city`
-    );
-    if (photonRes.ok) {
-      const photonData: PhotonGeocodingResponse = await photonRes.json();
-      if (photonData.features && photonData.features.length > 0) {
-        const match = photonData.features[0];
-        const [lon, lat] = match.geometry?.coordinates || [];
-        if (lat !== undefined && lon !== undefined) {
-          return {
-            name: match.properties?.name || cityName,
-            country: match.properties?.country || '',
-            latitude: lat,
-            longitude: lon,
-          };
+    try {
+      const photonRes = await fetch(
+        `https://photon.komoot.io/api/?q=${encoded}&limit=1&layer=city`
+      );
+      if (photonRes.ok) {
+        const photonData: PhotonGeocodingResponse = await photonRes.json();
+        if (photonData.features && photonData.features.length > 0) {
+          const match = photonData.features[0];
+          const [lon, lat] = match.geometry?.coordinates || [];
+          if (lat !== undefined && lon !== undefined) {
+            return {
+              name: match.properties?.name || cityName,
+              country: match.properties?.country || '',
+              latitude: lat,
+              longitude: lon,
+            };
+          }
         }
       }
+    } catch {
+      // Photon fallback failed as well
     }
 
-    throw new Error('City not found');
+    // Return null when neither service finds the city (e.g. xyzxyz)
+    return null;
   };
 
   // Helper to fetch forecast (current + next 3 days) with retry
@@ -177,10 +183,18 @@ function App() {
   const fetchWeatherForCity = async (cityName: string) => {
     setLoading(true);
     setError(null);
+    setNotFoundCity(null);
 
     try {
       // 1. Geocode city name to coordinates
       const location = await geocodeCity(cityName);
+      if (!location) {
+        // Piece 4: If no match found, show friendly city-not-found message instead of error
+        setNotFoundCity(cityName);
+        setLoading(false);
+        return;
+      }
+
       setCurrentCity(location.name);
       setCurrentCountry(location.country);
       setCoords({ lat: location.latitude, lon: location.longitude });
@@ -322,32 +336,98 @@ function App() {
           </button>
         </form>
 
-        {/* Piece 2: Current Weather Section */}
-        <section className="current-weather-section">
-          <div className="section-label-row">
-            <span className="current-weather-tag">Current Weather</span>
-            {observationTime && (
-              <span className="observation-time">Observed {observationTime}</span>
-            )}
-          </div>
-
-          <div className="location-section">
-            <h1 className="city-title">{currentCity}</h1>
-            {currentCountry && <p className="country-name">{currentCountry}</p>}
-          </div>
-
-          {/* Main temperature and status display */}
-          {loading ? (
-            <div className="status-box loading">
-              <div className="spinner"></div>
-              <p>Fetching weather for {currentCity}...</p>
+        {/* Piece 4: Friendly City Not Found notification (e.g. xyzxyz) */}
+        {notFoundCity && (
+          <div className="city-not-found-card" role="status">
+            <div className="not-found-icon-wrapper">
+              <svg
+                className="not-found-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
             </div>
-          ) : error ? (
-            <div className="status-box error">
-              <p>{error}</p>
+            <div className="not-found-content">
+              <h2 className="not-found-title">City not found</h2>
+              <p className="not-found-text">
+                We couldn’t find any weather results for <strong>&ldquo;{notFoundCity}&rdquo;</strong>.
+              </p>
+              <p className="not-found-hint">
+                Please check the spelling or try searching for major cities:
+              </p>
+              <div className="quick-suggestions">
+                <button
+                  type="button"
+                  className="suggestion-chip"
+                  onClick={() => fetchWeatherForCity('Lagos')}
+                >
+                  Lagos
+                </button>
+                <button
+                  type="button"
+                  className="suggestion-chip"
+                  onClick={() => fetchWeatherForCity('Abuja')}
+                >
+                  Abuja
+                </button>
+                <button
+                  type="button"
+                  className="suggestion-chip"
+                  onClick={() => fetchWeatherForCity('London')}
+                >
+                  London
+                </button>
+                <button
+                  type="button"
+                  className="suggestion-chip"
+                  onClick={() => fetchWeatherForCity('Tokyo')}
+                >
+                  Tokyo
+                </button>
+              </div>
             </div>
-          ) : (
-            <>
+          </div>
+        )}
+
+        {/* Loading state indicator */}
+        {loading && (
+          <div className="status-box loading">
+            <div className="spinner"></div>
+            <p>Fetching weather data...</p>
+          </div>
+        )}
+
+        {/* Technical network error state */}
+        {error && !loading && (
+          <div className="status-box error">
+            <p>{error}</p>
+          </div>
+        )}
+
+        {/* Main Weather Content (only shown when not in notFound or error) */}
+        {!notFoundCity && !loading && !error && (
+          <>
+            {/* Piece 2: Current Weather Section */}
+            <section className="current-weather-section">
+              <div className="section-label-row">
+                <span className="current-weather-tag">Current Weather</span>
+                {observationTime && (
+                  <span className="observation-time">Observed {observationTime}</span>
+                )}
+              </div>
+
+              <div className="location-section">
+                <h1 className="city-title">{currentCity}</h1>
+                {currentCountry && <p className="country-name">{currentCountry}</p>}
+              </div>
+
               <div className="temp-display">
                 <div className="temp-glow"></div>
                 <div className="temp-value">
@@ -370,39 +450,39 @@ function App() {
                   </div>
                 </div>
               )}
-            </>
-          )}
-        </section>
+            </section>
 
-        {/* Piece 3: Next 3 Days Section */}
-        {forecast.length > 0 && !loading && !error && (
-          <section className="forecast-section">
-            <div className="forecast-header">
-              <span className="forecast-title">Next 3 Days</span>
-              <span className="forecast-badge">High / Low Forecast</span>
-            </div>
-
-            <div className="forecast-list">
-              {forecast.map((day) => (
-                <div key={day.date} className="forecast-card">
-                  <div className="forecast-day-info">
-                    <span className="forecast-day-name">{day.dayLabel}</span>
-                    <span className="forecast-date">{day.date}</span>
-                  </div>
-                  <div className="forecast-temp-range">
-                    <span className="temp-pill max" title="Highest temperature">
-                      <span className="temp-arrow">▲</span>
-                      <span>{day.maxTemp.toFixed(1)}°C</span>
-                    </span>
-                    <span className="temp-pill min" title="Lowest temperature">
-                      <span className="temp-arrow">▼</span>
-                      <span>{day.minTemp.toFixed(1)}°C</span>
-                    </span>
-                  </div>
+            {/* Piece 3: Next 3 Days Section */}
+            {forecast.length > 0 && (
+              <section className="forecast-section">
+                <div className="forecast-header">
+                  <span className="forecast-title">Next 3 Days</span>
+                  <span className="forecast-badge">High / Low Forecast</span>
                 </div>
-              ))}
-            </div>
-          </section>
+
+                <div className="forecast-list">
+                  {forecast.map((day) => (
+                    <div key={day.date} className="forecast-card">
+                      <div className="forecast-day-info">
+                        <span className="forecast-day-name">{day.dayLabel}</span>
+                        <span className="forecast-date">{day.date}</span>
+                      </div>
+                      <div className="forecast-temp-range">
+                        <span className="temp-pill max" title="Highest temperature">
+                          <span className="temp-arrow">▲</span>
+                          <span>{day.maxTemp.toFixed(1)}°C</span>
+                        </span>
+                        <span className="temp-pill min" title="Lowest temperature">
+                          <span className="temp-arrow">▼</span>
+                          <span>{day.minTemp.toFixed(1)}°C</span>
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+          </>
         )}
 
         {/* Refresh button */}
