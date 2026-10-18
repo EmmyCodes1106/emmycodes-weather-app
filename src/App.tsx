@@ -34,6 +34,8 @@ interface WeatherResponse {
   current_units?: {
     temperature_2m: string;
   };
+  error?: boolean;
+  reason?: string;
 }
 
 interface GeocodedLocation {
@@ -50,6 +52,7 @@ function App() {
   const [temperature, setTemperature] = useState<number | null>(null);
   const [unit, setUnit] = useState<string>('°C');
   const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
+  const [observationTime, setObservationTime] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -109,7 +112,27 @@ function App() {
     throw new Error('City not found');
   };
 
-  // Main fetch function for any city
+  // Helper to fetch forecast from Open-Meteo with retry
+  const fetchForecast = async (lat: number, lon: number): Promise<WeatherResponse> => {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m&timezone=auto`;
+    let res = await fetch(url);
+    let data: WeatherResponse = await res.json();
+
+    // Single retry if server reports temporary overload
+    if (data.error && data.reason?.includes('overloaded')) {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      res = await fetch(url);
+      data = await res.json();
+    }
+
+    if (data.error || !res.ok) {
+      throw new Error(data.reason || 'Failed to reach weather service');
+    }
+
+    return data;
+  };
+
+  // Main fetch function for any city: updates current temperature
   const fetchWeatherForCity = async (cityName: string) => {
     setLoading(true);
     setError(null);
@@ -122,19 +145,14 @@ function App() {
       setCoords({ lat: location.latitude, lon: location.longitude });
 
       // 2. Fetch forecast data for coordinates
-      const weatherRes = await fetch(
-        `https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}&longitude=${location.longitude}&current=temperature_2m&timezone=auto`
-      );
-
-      if (!weatherRes.ok) {
-        throw new Error('Failed to reach weather service');
-      }
-
-      const weatherData: WeatherResponse = await weatherRes.json();
+      const weatherData = await fetchForecast(location.latitude, location.longitude);
 
       if (weatherData.current?.temperature_2m !== undefined) {
         setTemperature(weatherData.current.temperature_2m);
         setUnit(weatherData.current_units?.temperature_2m || '°C');
+        if (weatherData.current.time) {
+          setObservationTime(weatherData.current.time.replace('T', ' '));
+        }
       } else {
         throw new Error('Temperature data unavailable');
       }
@@ -153,7 +171,7 @@ function App() {
     setCityInput('');
   };
 
-  // Initial load for Lagos
+  // Initial load for Lagos on component mount
   useEffect(() => {
     let ignore = false;
 
@@ -183,6 +201,9 @@ function App() {
           if (weatherData.current?.temperature_2m !== undefined) {
             setTemperature(weatherData.current.temperature_2m);
             setUnit(weatherData.current_units?.temperature_2m || '°C');
+            if (weatherData.current.time) {
+              setObservationTime(weatherData.current.time.replace('T', ' '));
+            }
           }
           setLoading(false);
         }
@@ -247,47 +268,57 @@ function App() {
           </button>
         </form>
 
-        {/* City and country title */}
-        <section className="location-section">
-          <h1 className="city-title">{currentCity}</h1>
-          {currentCountry && <p className="country-name">{currentCountry}</p>}
-        </section>
-
-        {/* Main temperature and status display */}
-        {loading ? (
-          <div className="status-box loading">
-            <div className="spinner"></div>
-            <p>Fetching weather data...</p>
-          </div>
-        ) : error ? (
-          <div className="status-box error">
-            <p>{error}</p>
-          </div>
-        ) : (
-          <>
-            <section className="temp-display">
-              <div className="temp-glow"></div>
-              <div className="temp-value">
-                <span>{temperature}</span>
-                <span className="temp-unit">{unit}</span>
-              </div>
-            </section>
-
-            {/* Coordinates metadata display */}
-            {coords && (
-              <div className="coords-grid">
-                <div className="coord-item">
-                  <span className="coord-label">Latitude</span>
-                  <span className="coord-value">{coords.lat.toFixed(2)}° N</span>
-                </div>
-                <div className="coord-item">
-                  <span className="coord-label">Longitude</span>
-                  <span className="coord-value">{coords.lon.toFixed(2)}° E</span>
-                </div>
-              </div>
+        {/* Piece 2: Current Weather Section */}
+        <section className="current-weather-section">
+          <div className="section-label-row">
+            <span className="current-weather-tag">Current Weather</span>
+            {observationTime && (
+              <span className="observation-time">Observed {observationTime}</span>
             )}
-          </>
-        )}
+          </div>
+
+          <div className="location-section">
+            <h1 className="city-title">{currentCity}</h1>
+            {currentCountry && <p className="country-name">{currentCountry}</p>}
+          </div>
+
+          {/* Main temperature and status display */}
+          {loading ? (
+            <div className="status-box loading">
+              <div className="spinner"></div>
+              <p>Fetching weather for {currentCity}...</p>
+            </div>
+          ) : error ? (
+            <div className="status-box error">
+              <p>{error}</p>
+            </div>
+          ) : (
+            <>
+              <div className="temp-display">
+                <div className="temp-glow"></div>
+                <div className="temp-value">
+                  <span>{temperature}</span>
+                  <span className="temp-unit">{unit}</span>
+                </div>
+                <span className="temp-subtext">2m above ground</span>
+              </div>
+
+              {/* Coordinates metadata display */}
+              {coords && (
+                <div className="coords-grid">
+                  <div className="coord-item">
+                    <span className="coord-label">Latitude</span>
+                    <span className="coord-value">{coords.lat.toFixed(2)}° N</span>
+                  </div>
+                  <div className="coord-item">
+                    <span className="coord-label">Longitude</span>
+                    <span className="coord-value">{coords.lon.toFixed(2)}° E</span>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </section>
 
         {/* Refresh button */}
         <button
