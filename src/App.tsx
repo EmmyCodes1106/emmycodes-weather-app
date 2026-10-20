@@ -507,7 +507,7 @@ function App() {
         </button>
 
         <p className="footer-note">
-          1. City → Coordinates (Geocoding API) • 2. Coordinates → Weather (Forecast API)
+         <a href='https://api.whatsapp.com/send/?phone=%2B2348060939492&text&type=phone_number&app_absent=0'>Built by Emmycodes</a>
         </p>
       </div>
     </main>
